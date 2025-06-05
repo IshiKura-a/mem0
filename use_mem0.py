@@ -3,6 +3,7 @@ from copy import deepcopy
 import datetime
 import json
 import os
+import numpy as np
 import pandas as pd
 import time
 import multiprocessing as mp
@@ -40,6 +41,7 @@ class Mem0Config:
     
     # === 文件路径参数 ===
     input_file: str = '/mnt/zh/dataset/copilot/longmemeval_s.json'
+    # input_file: str = '/mnt/zh/dataset/copilot/locomo10.json.json'
     output_dir: str = '/mnt/zh/outputs/copilot_rag/'
     output_file_postfix: str = '_async'
     
@@ -271,6 +273,91 @@ def process_single_item(args) -> Optional[Dict]:
         return None
 
 
+def process_single_item_locomo(args) -> Optional[Dict]:
+    """多进程工作函数"""
+    item, config, worker_id = args
+    
+    try:
+        sample_id = item['sample_id']
+        start_time = time.time()
+        
+        # 创建Memory实例
+        memory_config_dict = config.get_memory_config_dict()
+        memory_config_dict['vector_store']['config']['collection_name'] = \
+            f"mem0_collection_{sample_id}_top{config.search_limit}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        memory_config = MemoryConfig(**memory_config_dict)
+        memory = Memory(config=memory_config)
+        
+        # 重试机制处理单个项目
+        for attempt in range(config.max_retries):
+            memory.delete(memory_id=sample_id)
+            min_chat_num = min(
+                config.search_limit,
+                sum(len(s) for v in item['conversation'].values() if isinstance(v, list) for s in v)
+            )
+            
+            for k,v in tqdm(item['conversation'].items(),
+                            desc=f'[Worker-{worker_id}] for Question {sample_id}', 
+                            position=worker_id):
+                if isinstance(v, list):
+                    session = [{
+                        'role': 'user' if chat['speaker'] == item['conversation']['speaker_a'] else 'assistant',
+                        'name': f'{chat["speaker"]}_{chat["dia_id"]}',
+                        'content': chat['text']
+                    } for chat in v]
+                    memory.add(
+                        session,
+                        user_id=sample_id,
+                        metadata={'session_id': v, 'session_date': item['event_summary'][f'events_{k}']},
+                        infer=config.infer,
+                    )
+            
+            search_results = []
+            relations = []
+            for qa in item['qa']:
+                result = memory.search(query=qa['question'], user_id=sample_id, limit=config.search_limit)
+                search_results.append(result['results'])
+                relations.append(result.get(['relations'], []))
+            
+            # 检查搜索结果是否满足条件
+            if all([len(results) >= min_chat_num for results in search_results]):
+                topk_dia_ids = [[_['metadata']['actor_id'].split('_')[-1] for _ in results] for results in search_results]
+                answer_retrieved = [
+                    [e in topk_dia_ids_per_qa for e in qa['evidence']]
+                    for qa, topk_dia_ids_per_qa in zip(item['qa'], topk_dia_ids)
+                ]
+                
+                retrieval_rate = sum([sum(_) for _ in answer_retrieved]) / sum([len(_) for _ in answer_retrieved])
+                
+                # 准备返回结果
+                result = item.copy()
+                result.update({
+                    'topk_dia_ids': topk_dia_ids,
+                    'answer_retrived': answer_retrieved,
+                    'retrieval_rate': retrieval_rate,
+                    'search_results': search_results,
+                    'relations': relations,
+                    'mem0_type': 'mem0+' if config.enable_graph else 'mem0',
+                    'worker_id': worker_id
+                })
+                
+                total_time = time.time() - start_time
+                print(f"[Worker-{worker_id}] 问题 {sample_id} 处理完成，总耗时 {total_time:.2f}s，检索率 {retrieval_rate:.4f}")
+                return result
+            else:
+                print(f"[Worker-{worker_id}] 问题 {sample_id} 搜索结果不足，重试 {attempt+1}/{config.max_retries}")
+        
+        print(f"[Worker-{worker_id}] 问题 {sample_id} 处理失败，重试次数超过限制")
+        return None
+        
+    except Exception as e:
+        import traceback
+        print(f"[Worker-{worker_id}] 处理问题 {item.get('sample_id', 'unknown')} 时出错: {e}")
+        traceback.print_exc()
+        return None
+
+
 def _add_sessions_to_memory(memory: Memory, item: Dict, question_id: str, infer: bool, worker_id: int):
     """添加会话到memory"""
     add_start = time.time()
@@ -316,7 +403,10 @@ def print_statistics(output_file: str):
     print(f'使用的版本: {mem0_type}')
     print(f'总体检索率: {overall_retrieval_rate:.4f}')
     print(f'处理的问题总数: {len(results_df)}')
-    print(f'平均每个问题的 topk 数量: {results_df["topk_session_ids"].apply(len).mean():.2f}')
+    if 'topk_session_ids' in results_df.columns:
+        print(f'平均每个问题的 topk 数量: {results_df["topk_session_ids"].apply(len).mean():.2f}')
+    elif 'topk_dia_ids' in results_df.columns:
+        print(f'平均每个问题的 topk 对话数量: {results_df["topk_dia_ids"].apply(lambda x: np.mean([len(i) for i in x])).mean():.2f}')
     
     if 'relations' in results_df.columns:
         relations_count = results_df['relations'].apply(lambda x: len(x) if x else 0).sum()
