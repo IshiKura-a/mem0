@@ -64,6 +64,10 @@ class RedisDB(VectorStoreBase):
             "name": collection_name,
             "prefix": f"mem0:{collection_name}",
         }
+        
+        print(f"Creating Redis index with schema: {index_schema}")
+        # import traceback
+        # traceback.print_stack()
 
         fields = DEFAULT_FIELDS.copy()
         fields[-1]["attrs"]["dims"] = embedding_model_dims
@@ -203,6 +207,9 @@ class RedisDB(VectorStoreBase):
 
     def get(self, vector_id):
         result = self.index.fetch(vector_id)
+        if result == {}:
+            return None
+
         payload = {
             "hash": result["hash"],
             "data": result["memory"],

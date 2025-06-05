@@ -56,6 +56,7 @@ client_telemetry = AnonymousTelemetry()
 
 
 def capture_event(event_name, memory_instance, additional_data=None):
+    return
     oss_telemetry = AnonymousTelemetry(
         vector_store=memory_instance._telemetry_vector_store
         if hasattr(memory_instance, "_telemetry_vector_store")

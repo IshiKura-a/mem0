@@ -186,3 +186,9 @@ eval/
 qdrant_storage/
 .crossnote
 testing.ipynb
+
+evaluation/dataset
+evaluation/results
+
+test.py
+test.json

@@ -2,6 +2,7 @@ import os
 from typing import Literal, Optional
 
 from openai import AzureOpenAI
+import tiktoken
 
 from mem0.configs.embeddings.base import BaseEmbedderConfig
 from mem0.embeddings.base import EmbeddingBase
@@ -24,6 +25,7 @@ class AzureOpenAIEmbedding(EmbeddingBase):
             api_key=api_key,
             http_client=self.config.http_client,
             default_headers=default_headers,
+            max_retries=5,
         )
 
     def embed(self, text, memory_action: Optional[Literal["add", "search", "update"]] = None):
@@ -36,5 +38,13 @@ class AzureOpenAIEmbedding(EmbeddingBase):
         Returns:
             list: The embedding vector.
         """
-        text = text.replace("\n", " ")
-        return self.client.embeddings.create(input=[text], model=self.config.model).data[0].embedding
+        text = self.truncate_text(text.replace("\n", " "))
+        return self.client.embeddings.create(input=text, model=self.config.model).data[0].embedding
+    
+    def truncate_text(self, text):
+        MAX_TOKENS = 8192
+        tokenizer = tiktoken.encoding_for_model(self.config.model)
+        tokens = tokenizer.encode(text, allowed_special={'<|endoftext|>'})
+        if len(tokens) > MAX_TOKENS:
+            tokens = tokens[:MAX_TOKENS]
+        return tokenizer.decode(tokens)

@@ -2,6 +2,7 @@ import os
 from typing import Dict, List, Optional
 
 from openai import AzureOpenAI
+from azure.identity import AzureCliCredential, DefaultAzureCredential
 
 from mem0.configs.llms.base import BaseLlmConfig
 from mem0.llms.base import LLMBase
@@ -15,10 +16,10 @@ class AzureOpenAIStructuredLLM(LLMBase):
         if not self.config.model:
             self.config.model = "gpt-4o-2024-08-06"
 
-        api_key = os.getenv("LLM_AZURE_OPENAI_API_KEY") or self.config.azure_kwargs.api_key
-        azure_deployment = os.getenv("LLM_AZURE_DEPLOYMENT") or self.config.azure_kwargs.azure_deployment
-        azure_endpoint = os.getenv("LLM_AZURE_ENDPOINT") or self.config.azure_kwargs.azure_endpoint
-        api_version = os.getenv("LLM_AZURE_API_VERSION") or self.config.azure_kwargs.api_version
+        api_key = self.config.azure_kwargs.api_key or os.getenv("LLM_AZURE_OPENAI_API_KEY")
+        azure_deployment = self.config.azure_kwargs.azure_deployment or os.getenv("LLM_AZURE_DEPLOYMENT") 
+        azure_endpoint = self.config.azure_kwargs.azure_endpoint or os.getenv("LLM_AZURE_ENDPOINT")
+        api_version = self.config.azure_kwargs.api_version or os.getenv("LLM_AZURE_API_VERSION")
         default_headers = self.config.azure_kwargs.default_headers
 
         # Can display a warning if API version is of model and api-version
@@ -29,6 +30,7 @@ class AzureOpenAIStructuredLLM(LLMBase):
             api_key=api_key,
             http_client=self.config.http_client,
             default_headers=default_headers,
+            max_retries=5,
         )
 
     def generate_response(
@@ -65,5 +67,11 @@ class AzureOpenAIStructuredLLM(LLMBase):
             params["tools"] = tools
             params["tool_choice"] = tool_choice
 
-        response = self.client.chat.completions.create(**params)
+        verify_scope = os.getenv("VERIFY_SCOPE")
+        credential = DefaultAzureCredential()
+        response = self.client.chat.completions.create(
+            extra_headers={
+                "Authorization": f"Bearer {credential.get_token(verify_scope).token}",
+            },
+            **params)
         return self._parse_response(response, tools)

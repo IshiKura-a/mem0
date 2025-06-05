@@ -168,16 +168,23 @@ class MemoryGraph:
         _tools = [EXTRACT_ENTITIES_TOOL]
         if self.llm_provider in ["azure_openai_structured", "openai_structured"]:
             _tools = [EXTRACT_ENTITIES_STRUCT_TOOL]
-        search_results = self.llm.generate_response(
-            messages=[
-                {
-                    "role": "system",
-                    "content": f"You are a smart assistant who understands entities and their types in a given text. If user message contains self reference such as 'I', 'me', 'my' etc. then use {filters['user_id']} as the source entity. Extract all the entities from the text. ***DO NOT*** answer the question itself if the given text is a question.",
-                },
-                {"role": "user", "content": data},
-            ],
-            tools=_tools,
-        )
+        
+        try:
+            search_results = self.llm.generate_response(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": f"You are a smart assistant who understands entities and their types in a given text. If user message contains self reference such as 'I', 'me', 'my' etc. then use {filters['user_id']} as the source entity. Extract all the entities from the text. ***DO NOT*** answer the question itself if the given text is a question.",
+                    },
+                    {"role": "user", "content": data},
+                ],
+                tools=_tools,
+            )
+        except Exception as e:
+            logger.exception(
+                f"Error in extract entities tool: {e}, llm_provider={self.llm_provider}, data={data}"
+            )
+            return {}
 
         entity_type_map = {}
 
@@ -221,17 +228,22 @@ class MemoryGraph:
         if self.llm_provider in ["azure_openai_structured", "openai_structured"]:
             _tools = [RELATIONS_STRUCT_TOOL]
 
-        extracted_entities = self.llm.generate_response(
-            messages=messages,
-            tools=_tools,
-        )
-
         entities = []
-        if extracted_entities["tool_calls"]:
-            entities = extracted_entities["tool_calls"][0]["arguments"]["entities"]
+        try:
+            extracted_entities = self.llm.generate_response(
+                messages=messages,
+                tools=_tools,
+            )
+            
+            if extracted_entities["tool_calls"]:
+                entities = extracted_entities["tool_calls"][0]["arguments"]["entities"]
 
-        entities = self._remove_spaces_from_entities(entities)
-        logger.debug(f"Extracted entities: {entities}")
+            entities = self._remove_spaces_from_entities(entities)
+            logger.debug(f"Extracted entities: {entities}")
+        except Exception as e:
+            logger.exception(
+                f"Error in extract relations tool: {e}, llm_provider={self.llm_provider}, data={data}"
+            )
         return entities
 
     def _search_graph_db(self, node_list, filters, limit=100):
@@ -279,13 +291,19 @@ class MemoryGraph:
                 DELETE_MEMORY_STRUCT_TOOL_GRAPH,
             ]
 
-        memory_updates = self.llm.generate_response(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            tools=_tools,
-        )
+        try:
+            memory_updates = self.llm.generate_response(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                tools=_tools,
+            )
+        except Exception as e:
+            logger.exception(
+                f"Error in delete tool: {e}, llm_provider={self.llm_provider}, search_output={search_output}"
+            )
+            return []
 
         to_be_deleted = []
         for item in memory_updates["tool_calls"]:
@@ -307,7 +325,7 @@ class MemoryGraph:
             # Delete the specific relationship between nodes
             cypher = f"""
             MATCH (n {self.node_label} {{name: $source_name, user_id: $user_id}})
-            -[r:{relationship}]->
+            -[r:`{relationship}`]->
             (m {self.node_label} {{name: $dest_name, user_id: $user_id}})
             DELETE r
             RETURN 
@@ -366,7 +384,7 @@ class MemoryGraph:
                     WITH source, destination
                     CALL db.create.setNodeVectorProperty(destination, 'embedding', $destination_embedding)
                     WITH source, destination
-                    MERGE (source)-[r:{relationship}]->(destination)
+                    MERGE (source)-[r:`{relationship}`]->(destination)
                     ON CREATE SET 
                         r.created = timestamp(),
                         r.mentions = 1
@@ -397,7 +415,7 @@ class MemoryGraph:
                     WITH source, destination
                     CALL db.create.setNodeVectorProperty(source, 'embedding', $source_embedding)
                     WITH source, destination
-                    MERGE (source)-[r:{relationship}]->(destination)
+                    MERGE (source)-[r:`{relationship}`]->(destination)
                     ON CREATE SET 
                         r.created = timestamp(),
                         r.mentions = 1
@@ -421,7 +439,7 @@ class MemoryGraph:
                     MATCH (destination)
                     WHERE elementId(destination) = $destination_id
                     SET destination.mentions = coalesce(destination.mentions) + 1
-                    MERGE (source)-[r:{relationship}]->(destination)
+                    MERGE (source)-[r:`{relationship}`]->(destination)
                     ON CREATE SET 
                         r.created_at = timestamp(),
                         r.updated_at = timestamp(),
@@ -454,7 +472,7 @@ class MemoryGraph:
                     WITH source, destination
                     CALL db.create.setNodeVectorProperty(destination, 'embedding', $source_embedding)
                     WITH source, destination
-                    MERGE (source)-[rel:{relationship}]->(destination)
+                    MERGE (source)-[rel:`{relationship}`]->(destination)
                     ON CREATE SET rel.created = timestamp(), rel.mentions = 1
                     ON MATCH SET rel.mentions = coalesce(rel.mentions, 0) + 1
                     RETURN source.name AS source, type(rel) AS relationship, destination.name AS target
@@ -471,11 +489,18 @@ class MemoryGraph:
         return results
 
     def _remove_spaces_from_entities(self, entity_list):
+        cleaned_list = []
         for item in entity_list:
-            item["source"] = item["source"].lower().replace(" ", "_")
-            item["relationship"] = item["relationship"].lower().replace(" ", "_")
-            item["destination"] = item["destination"].lower().replace(" ", "_")
-        return entity_list
+            try:
+                item["source"] = item["source"].lower().replace(" ", "_")
+                item["relationship"] = item["relationship"].lower().replace(" ", "_")
+                item["destination"] = item["destination"].lower().replace(" ", "_")
+                cleaned_list.append(item)
+            except Exception as e:
+                # Optionally log the error or item
+                logger.warning(f"Skipping item due to missing key: {e} -> {item}")
+                continue
+        return cleaned_list
 
     def _search_source_node(self, source_embedding, user_id, threshold=0.9):
         cypher = f"""
