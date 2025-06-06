@@ -75,7 +75,7 @@ class Mem0Config:
     def output_file(self) -> str:
         """生成输出文件路径"""
         mem0_type = "mem0plus" if self.enable_graph else "mem0"
-        filename = f'{self.output_file_prefix}_all_type_{mem0_type}_top{self.search_limit}{self.output_file_postfix}.jsonl'
+        filename = f'{self.output_file_prefix}_{mem0_type}_top{self.search_limit}{self.output_file_postfix}.jsonl'
         return os.path.join(self.output_dir, filename)
     
     def get_memory_config_dict(self) -> Dict:
