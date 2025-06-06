@@ -1,0 +1,54 @@
+max_workers: 40
+search_limit: 30
+enable_graph: true
+
+# === 文件路径参数 ===
+# input_file: '/mnt/zh/dataset/copilot/longmemeval_s.json'
+input_file: '/mnt/zh/dataset/copilot/locomo10.json'
+output_dir: '/mnt/zh/outputs/copilot_rag/'
+output_file_prefix: 'locomo'
+output_file_postfix: '_async'
+
+# === 处理参数 ===
+max_retries: 3
+infer: false
+
+# === Memory配置 ===
+memory_config:
+  vector_store:
+    provider: 'redis'
+    config:
+      collection_name: null  # 运行时动态设置
+      redis_url: 'redis://localhost:6380'
+      embedding_model_dims: 1024
+  
+  embedder:
+    provider: 'bge'
+    config:
+      embedding_dims: 1024
+      model: '/mnt/zh/rag/bge-m3'
+      model_kwargs:
+        passage_max_length: 8192
+  
+  llm:
+    provider: 'azure_openai'
+    config:
+      model: 'gpt-4o-mini'
+  
+  graph_store:
+    provider: 'neo4j'
+    config:
+      url: 'bolt://localhost:7688'
+      username: 'neo4j'
+      password: '12345678'
+      llm:
+        provider: 'azure_openai_structured'
+        config:
+          azure_kwargs:
+            api_key: 'EMPTY'
+            azure_endpoint: 'https://westus2.papyrus.binginternal.com'
+            default_headers:
+              Content-Type: 'application/json'
+              papyrus-model-name: 'GPT4oMini-Batch'
+              papyrus-quota-id: 'DeepSeekAMDAds'
+              papyrus-timeout-ms: '1200000'
