@@ -6,12 +6,13 @@ enable_graph: false
 input_file: '/mnt/zh/dataset/copilot/longmemeval_s.json'
 # input_file: '/mnt/zh/dataset/copilot/locomo10.json'
 output_dir: '/mnt/zh/outputs/copilot_rag/'
-output_file_prefix: 'mem0_results'
+output_file_prefix: 'longmemeval_s'
 output_file_postfix: '_async'
 
 # === 处理参数 ===
 max_retries: 3
 infer: false
+id_key: 'question_id'
 
 # === Memory配置 ===
 memory_config:

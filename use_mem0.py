@@ -47,6 +47,7 @@ class Mem0Config:
     # === 处理参数 ===
     max_retries: int
     infer: bool
+    id_key: str
     
     # === Memory配置 ===
     memory_config: Dict
@@ -68,6 +69,7 @@ class Mem0Config:
         
         self.max_retries = config_data['max_retries']
         self.infer = config_data['infer']
+        self.id_key = config_data['id_key']
         
         self.memory_config = config_data['memory_config']
     
@@ -108,7 +110,7 @@ class MultiprocessMem0Processor:
         if os.path.exists(self.config.output_file):
             try:
                 res = pd.read_json(self.config.output_file, lines=True, orient="records")
-                return set() if res.empty else set(res['question_id'])
+                return set() if res.empty else set(res[self.config.id_key])
             except:
                 return set()
         return set()
@@ -120,7 +122,7 @@ class MultiprocessMem0Processor:
         
         # 获取已处理的任务
         tasks_processed = self._get_processed_tasks()
-        tasks_remain = [item for item in self.data if item['question_id'] not in tasks_processed]
+        tasks_remain = [item for item in self.data if item[self.config.id_key] not in tasks_processed]
         
         print(f"已处理任务: {len(tasks_processed)} / {len(self.data)}")
         print(f'正在处理文件: {self.config.output_file}')
@@ -150,9 +152,17 @@ class MultiprocessMem0Processor:
         
         print(f'开始使用 {self.config.max_workers} 个进程处理 {len(args_list)} 个任务')
         
+        # 根据输出文件前缀选择不同的处理函数
+        if 'locomo' in self.config.output_file_prefix.lower():
+            process_func = process_single_item_locomo
+        elif 'longmemeval' in self.config.output_file_prefix.lower():
+            process_func = process_single_item
+        else:
+            raise NotImplementedError(f"不支持的数据集类型: {self.config.output_file_prefix}")
+        
         # 启动工作进程池
         with mp.Pool(self.config.max_workers) as pool:
-            for result in tqdm(pool.imap(process_single_item, args_list), total=len(args_list), desc="处理进度"):
+            for result in tqdm(pool.imap(process_func, args_list), total=len(args_list), desc="处理进度"):
                 if result is not None:
                     queue.put(result)
                     self.tot_processed += 1
@@ -175,27 +185,27 @@ def process_single_item(args) -> Optional[Dict]:
     item, config, worker_id = args
     
     try:
-        question_id = item['question_id']
+        item_id = item[config.id_key]
         start_time = time.time()
         
         # 创建Memory实例
         memory_config_dict = config.get_memory_config_dict()
         memory_config_dict['vector_store']['config']['collection_name'] = \
-            f"mem0_collection_{question_id}_top{config.search_limit}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            f"mem0_collection_{item_id}_top{config.search_limit}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         memory_config = MemoryConfig(**memory_config_dict)
         memory = Memory(config=memory_config)
         
         # 重试机制处理单个项目
         for attempt in range(config.max_retries):
-            memory.delete(memory_id=question_id)
+            memory.delete(memory_id=item_id)
             min_chat_num = min(config.search_limit, sum(len(s) for s in item['haystack_sessions']))
             
             # 添加会话数据
-            _add_sessions_to_memory(memory, item, question_id, config.infer, worker_id)
+            _add_sessions_to_memory(memory, item, item_id, config.infer, worker_id)
             
             # 搜索相关记忆
-            search_results = memory.search(query=item['question'], user_id=question_id, limit=config.search_limit)
+            search_results = memory.search(query=item['question'], user_id=item_id, limit=config.search_limit)
             
             # 检查搜索结果是否满足条件
             if len(search_results['results']) >= min_chat_num:
@@ -219,17 +229,17 @@ def process_single_item(args) -> Optional[Dict]:
                     result['relations'] = search_results['relations']
                 
                 total_time = time.time() - start_time
-                print(f"[Worker-{worker_id}] 问题 {question_id} 处理完成，总耗时 {total_time:.2f}s，检索率 {retrieval_rate:.4f}")
+                print(f"[Worker-{worker_id}] 问题 {item_id} 处理完成，总耗时 {total_time:.2f}s，检索率 {retrieval_rate:.4f}")
                 return result
             else:
-                print(f"[Worker-{worker_id}] 问题 {question_id} 搜索结果不足，重试 {attempt+1}/{config.max_retries}")
+                print(f"[Worker-{worker_id}] 问题 {item_id} 搜索结果不足，重试 {attempt+1}/{config.max_retries}")
         
-        print(f"[Worker-{worker_id}] 问题 {question_id} 处理失败，重试次数超过限制")
+        print(f"[Worker-{worker_id}] 问题 {item_id} 处理失败，重试次数超过限制")
         return None
         
     except Exception as e:
         import traceback
-        print(f"[Worker-{worker_id}] 处理问题 {item.get('question_id', 'unknown')} 时出错: {e}")
+        print(f"[Worker-{worker_id}] 处理问题 {item.get(config.id_key, 'unknown')} 时出错: {e}")
         traceback.print_exc()
         return None
 
@@ -239,27 +249,27 @@ def process_single_item_locomo(args) -> Optional[Dict]:
     item, config, worker_id = args
     
     try:
-        sample_id = item['sample_id']
+        item_id = item[config.id_key]
         start_time = time.time()
         
         # 创建Memory实例
         memory_config_dict = config.get_memory_config_dict()
         memory_config_dict['vector_store']['config']['collection_name'] = \
-            f"mem0_collection_{sample_id}_top{config.search_limit}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            f"mem0_collection_{item_id}_top{config.search_limit}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         memory_config = MemoryConfig(**memory_config_dict)
         memory = Memory(config=memory_config)
         
         # 重试机制处理单个项目
         for attempt in range(config.max_retries):
-            memory.delete(memory_id=sample_id)
+            memory.delete(memory_id=item_id)
             min_chat_num = min(
                 config.search_limit,
                 sum(len(s) for v in item['conversation'].values() if isinstance(v, list) for s in v)
             )
             
             for k,v in tqdm(item['conversation'].items(),
-                            desc=f'[Worker-{worker_id}] for Question {sample_id}', 
+                            desc=f'[Worker-{worker_id}] for Question {item_id}',
                             position=worker_id):
                 if isinstance(v, list):
                     session = [{
@@ -269,7 +279,7 @@ def process_single_item_locomo(args) -> Optional[Dict]:
                     } for chat in v]
                     memory.add(
                         session,
-                        user_id=sample_id,
+                        user_id=item_id,
                         metadata={'session_id': k, 'session_date': item['conversation'][f'{k}_date_time']},
                         infer=config.infer,
                     )
@@ -277,7 +287,7 @@ def process_single_item_locomo(args) -> Optional[Dict]:
             search_results = []
             relations = []
             for qa in item['qa']:
-                result = memory.search(query=qa['question'], user_id=sample_id, limit=config.search_limit)
+                result = memory.search(query=qa['question'], user_id=item_id, limit=config.search_limit)
                 search_results.append(result['results'])
                 relations.append(result.get('relations', []))
             
@@ -315,40 +325,40 @@ def process_single_item_locomo(args) -> Optional[Dict]:
                 })
                 
                 total_time = time.time() - start_time
-                print(f"[Worker-{worker_id}] 问题 {sample_id} 处理完成，总耗时 {total_time:.2f}s，检索率 {retrieval_rate:.4f}")
+                print(f"[Worker-{worker_id}] 问题 {item_id} 处理完成，总耗时 {total_time:.2f}s，检索率 {retrieval_rate:.4f}")
                 return result
             else:
-                print(f"[Worker-{worker_id}] 问题 {sample_id} 搜索结果不足，重试 {attempt+1}/{config.max_retries}")
+                print(f"[Worker-{worker_id}] 问题 {item_id} 搜索结果不足，重试 {attempt+1}/{config.max_retries}")
         
-        print(f"[Worker-{worker_id}] 问题 {sample_id} 处理失败，重试次数超过限制")
+        print(f"[Worker-{worker_id}] 问题 {item_id} 处理失败，重试次数超过限制")
         return None
         
     except Exception as e:
         import traceback
-        print(f"[Worker-{worker_id}] 处理问题 {item.get('sample_id', 'unknown')} 时出错: {e}")
+        print(f"[Worker-{worker_id}] 处理问题 {item.get(config.id_key, 'unknown')} 时出错: {e}")
         traceback.print_exc()
         return None
 
 
-def _add_sessions_to_memory(memory: Memory, item: Dict, question_id: str, infer: bool, worker_id: int):
+def _add_sessions_to_memory(memory: Memory, item: Dict, item_id: str, infer: bool, worker_id: int):
     """添加会话到memory"""
     add_start = time.time()
     session_items = list(zip(item['haystack_sessions'], item['haystack_session_ids'], item['haystack_dates']))
     
     for haystack_session, haystack_session_id, haystack_date in tqdm(
-        session_items, 
-        desc=f'[Worker-{worker_id}] for Question {question_id}', 
+        session_items,
+        desc=f'[Worker-{worker_id}] for Question {item_id}',
         position=worker_id
     ):
         memory.add(
             haystack_session,
-            user_id=question_id,
+            user_id=item_id,
             metadata={'haystack_session_id': haystack_session_id, 'haystack_date': haystack_date},
             infer=infer,
         )
     
     add_time = time.time() - add_start
-    print(f"[Worker-{worker_id}] 问题 {question_id} 添加会话完成，耗时 {add_time:.2f}s")
+    print(f"[Worker-{worker_id}] 问题 {item_id} 添加会话完成，耗时 {add_time:.2f}s")
 
 
 def writer_worker(queue: mp.Queue, output_file: str):

@@ -12,6 +12,7 @@ output_file_postfix: '_async'
 # === 处理参数 ===
 max_retries: 3
 infer: false
+id_key: 'sample_id'
 
 # === Memory配置 ===
 memory_config:
