@@ -7,11 +7,11 @@ import pandas as pd
 import time
 import multiprocessing as mp
 from functools import partial
-from dataclasses import dataclass
 from pathlib import Path
 from tqdm import tqdm
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
+import yaml
 
 from mem0.memory.main import Memory
 from mem0.configs.base import MemoryConfig
@@ -30,99 +30,61 @@ for logger_name in ['httpx', 'mem0.memory.main', 'openai._base_client', 'mem0.me
     mute_logger(logger_name)
 load_dotenv()
 
-@dataclass
 class Mem0Config:
-    """Mem0配置类 - 集中管理所有参数"""
+    """Mem0配置类 - 从config.yaml文件读取配置"""
+    
     # === 可调整的核心参数 ===
-    max_workers: int = 40
-    search_limit: int = 100
-    enable_graph: bool = False
+    max_workers: int
+    search_limit: int
+    enable_graph: bool
     
     # === 文件路径参数 ===
-    input_file: str = '/mnt/zh/dataset/copilot/longmemeval_s.json'
-    # input_file: str = '/mnt/zh/dataset/copilot/locomo10.json'
-    output_dir: str = '/mnt/zh/outputs/copilot_rag/'
-    output_file_postfix: str = '_async'
-    
-    # === 模型参数 ===
-    embedding_dims: int = 1536
-    embedding_model: str = 'text-embedding-3-small'
-    llm_model: str = 'gpt-4o-mini'
-    
-    # === 数据库参数 ===
-    redis_url: str = 'redis://localhost:6379'
-    neo4j_url: str = 'bolt://localhost:7688'
-    neo4j_username: str = 'neo4j'
-    neo4j_password: str = '12345678'
-    
-    # === Azure参数 ===
-    azure_api_key: str = 'EMPTY'
-    azure_endpoint: str = 'https://westus2.papyrus.binginternal.com'
-    papyrus_model_name: str = 'GPT4oMini-Batch'
-    papyrus_quota_id: str = 'DeepSeekAMDAds'
-    papyrus_timeout_ms: str = '1200000'
+    input_file: str
+    output_dir: str
+    output_file_prefix: str
+    output_file_postfix: str
     
     # === 处理参数 ===
-    max_retries: int = 3
-    infer: bool = True
+    max_retries: int
+    infer: bool
+    
+    # === Memory配置 ===
+    memory_config: Dict
+    
+    def __init__(self, config_path: str = 'config.yaml'):
+        """从YAML文件初始化配置"""
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config_data = yaml.safe_load(f)
+        
+        # 设置所有属性
+        self.max_workers = config_data['max_workers']
+        self.search_limit = config_data['search_limit']
+        self.enable_graph = config_data['enable_graph']
+        
+        self.input_file = config_data['input_file']
+        self.output_dir = config_data['output_dir']
+        self.output_file_prefix = config_data['output_file_prefix']
+        self.output_file_postfix = config_data['output_file_postfix']
+        
+        self.max_retries = config_data['max_retries']
+        self.infer = config_data['infer']
+        
+        self.memory_config = config_data['memory_config']
     
     @property
     def output_file(self) -> str:
         """生成输出文件路径"""
         mem0_type = "mem0plus" if self.enable_graph else "mem0"
-        filename = f'longmemeval_s_all_type_{mem0_type}_top{self.search_limit}{self.output_file_postfix}.jsonl'
+        filename = f'{self.output_file_prefix}_all_type_{mem0_type}_top{self.search_limit}{self.output_file_postfix}.jsonl'
         return os.path.join(self.output_dir, filename)
     
     def get_memory_config_dict(self) -> Dict:
-        """生成Memory配置字典"""
-        config = {
-            'vector_store': {
-                'provider': 'redis',
-                'config': {
-                    'collection_name': None,  # 运行时动态设置
-                    'redis_url': self.redis_url,
-                    'embedding_model_dims': self.embedding_dims,
-                }
-            },
-            'embedder': {
-                'provider': 'azure_openai',
-                'config': {
-                    'embedding_dims': self.embedding_dims,
-                    'model': self.embedding_model,
-                }
-            },
-            'llm': {
-                'provider': 'azure_openai',
-                'config': {
-                    'model': self.llm_model,
-                }
-            },
-        }
+        """从YAML配置生成Memory配置字典"""
+        config = deepcopy(self.memory_config)
         
-        if self.enable_graph:
-            config['graph_store'] = {
-                'provider': 'neo4j',
-                'config': {
-                    'url': self.neo4j_url,
-                    'username': self.neo4j_username,
-                    'password': self.neo4j_password,
-                    'llm': {
-                        'provider': 'azure_openai_structured',
-                        'config': {
-                            'azure_kwargs': {
-                                'api_key': self.azure_api_key,
-                                'azure_endpoint': self.azure_endpoint,
-                                'default_headers': {
-                                    "Content-Type": "application/json",
-                                    "papyrus-model-name": self.papyrus_model_name,
-                                    "papyrus-quota-id": self.papyrus_quota_id,
-                                    "papyrus-timeout-ms": self.papyrus_timeout_ms
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        # 如果不启用图数据库，移除graph_store配置
+        if not self.enable_graph and 'graph_store' in config:
+            del config['graph_store']
         
         return config
 
@@ -427,28 +389,30 @@ def print_statistics(output_file: str):
         print(f'各进程处理数量: {worker_stats.to_dict()}')
 
 
-def run_mem0_experiment(enable_graph: bool = False, infer: bool = False):
-    """运行 mem0 实验的主入口函数"""
-    config = Mem0Config(enable_graph=enable_graph, infer=infer)
-    
-    processor = MultiprocessMem0Processor(config)
-    processor.run()
-    print_statistics(config.output_file)
-
-
 def main():
     """主函数"""
-    import sys
+    import argparse
     
-    enable_graph = '--enable-graph' in sys.argv
-    infer = '--infer' in sys.argv
+    parser = argparse.ArgumentParser(description='Mem0 多进程处理器')
+    parser.add_argument('--config', '-c', default='config/config.yaml', help='配置文件路径 (默认: config/config.yaml)')
     
-    if enable_graph:
+    args = parser.parse_args()
+    
+    # 从配置文件读取设置
+    config = Mem0Config(config_path=args.config)
+    
+    if config.enable_graph:
         print("使用多进程 mem0+ (带图数据库)")
     else:
         print("使用多进程标准 mem0 (不带图数据库)")
     
-    run_mem0_experiment(enable_graph=enable_graph, infer=infer)
+    print(f"使用配置文件: {args.config}")
+    print(f"推理模式: {config.infer}")
+    
+    # 直接执行处理流程
+    processor = MultiprocessMem0Processor(config)
+    processor.run()
+    print_statistics(config.output_file)
     print("多进程处理完成!")
 
 
