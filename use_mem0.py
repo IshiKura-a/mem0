@@ -1,4 +1,3 @@
-import asyncio
 from copy import deepcopy
 import datetime
 import json
@@ -27,7 +26,7 @@ def mute_logger(name: str):
     logger.propagate = False
 
 # 静音日志
-for logger_name in ['httpx', 'mem0.memory.main', 'openai._base_client']:
+for logger_name in ['httpx', 'mem0.memory.main', 'openai._base_client', 'mem0.memory.graph_memory']:
     mute_logger(logger_name)
 load_dotenv()
 
@@ -41,7 +40,7 @@ class Mem0Config:
     
     # === 文件路径参数 ===
     input_file: str = '/mnt/zh/dataset/copilot/longmemeval_s.json'
-    # input_file: str = '/mnt/zh/dataset/copilot/locomo10.json.json'
+    # input_file: str = '/mnt/zh/dataset/copilot/locomo10.json'
     output_dir: str = '/mnt/zh/outputs/copilot_rag/'
     output_file_postfix: str = '_async'
     
@@ -309,7 +308,7 @@ def process_single_item_locomo(args) -> Optional[Dict]:
                     memory.add(
                         session,
                         user_id=sample_id,
-                        metadata={'session_id': v, 'session_date': item['event_summary'][f'events_{k}']},
+                        metadata={'session_id': k, 'session_date': item['conversation'][f'{k}_date_time']},
                         infer=config.infer,
                     )
             
@@ -318,11 +317,22 @@ def process_single_item_locomo(args) -> Optional[Dict]:
             for qa in item['qa']:
                 result = memory.search(query=qa['question'], user_id=sample_id, limit=config.search_limit)
                 search_results.append(result['results'])
-                relations.append(result.get(['relations'], []))
+                relations.append(result.get('relations', []))
             
             # 检查搜索结果是否满足条件
             if all([len(results) >= min_chat_num for results in search_results]):
-                topk_dia_ids = [[_['metadata']['actor_id'].split('_')[-1] for _ in results] for results in search_results]
+                if config.infer:
+                    result = item.copy()
+                    result.update({
+                        'search_results': search_results,
+                        'relations': relations,
+                        'mem0_type': 'mem0+' if config.enable_graph else 'mem0',
+                        'worker_id': worker_id,
+                        'retrieval_rate': -1,
+                    })
+                    return result
+
+                topk_dia_ids = [[_['actor_id'].split('_')[-1] for _ in results] for results in search_results]
                 answer_retrieved = [
                     [e in topk_dia_ids_per_qa for e in qa['evidence']]
                     for qa, topk_dia_ids_per_qa in zip(item['qa'], topk_dia_ids)
@@ -417,9 +427,9 @@ def print_statistics(output_file: str):
         print(f'各进程处理数量: {worker_stats.to_dict()}')
 
 
-def run_mem0_experiment(enable_graph: bool = False):
+def run_mem0_experiment(enable_graph: bool = False, infer: bool = False):
     """运行 mem0 实验的主入口函数"""
-    config = Mem0Config(enable_graph=enable_graph, infer=enable_graph)
+    config = Mem0Config(enable_graph=enable_graph, infer=infer)
     
     processor = MultiprocessMem0Processor(config)
     processor.run()
@@ -430,14 +440,15 @@ def main():
     """主函数"""
     import sys
     
-    enable_graph = len(sys.argv) > 1 and sys.argv[1] == '--enable-graph'
+    enable_graph = '--enable-graph' in sys.argv
+    infer = '--infer' in sys.argv
     
     if enable_graph:
         print("使用多进程 mem0+ (带图数据库)")
     else:
         print("使用多进程标准 mem0 (不带图数据库)")
     
-    run_mem0_experiment(enable_graph=enable_graph)
+    run_mem0_experiment(enable_graph=enable_graph, infer=infer)
     print("多进程处理完成!")
 
 
