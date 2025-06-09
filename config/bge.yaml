@@ -1,13 +1,13 @@
-max_workers: 40
+max_workers: 20
 search_limit: 100
 enable_graph: true
 
 # === 文件路径参数 ===
 # input_file: '/mnt/zh/dataset/copilot/longmemeval_s.json'
 # input_file: '/mnt/zh/dataset/copilot/locomo10.json'
-input_file: '/mnt/zh/dataset/copilot/personamem_32k.jsonl'
+input_file: '/mnt/zh/dataset/copilot/personamem_128k.jsonl'
 output_dir: '/mnt/zh/outputs/copilot_rag/'
-output_file_prefix: 'personamem_32k'
+output_file_prefix: 'personamem_128k'
 output_file_postfix: '_async'
 
 # === 处理参数 ===

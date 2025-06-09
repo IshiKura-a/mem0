@@ -20,14 +20,15 @@ from mem0.vector_stores.configs import VectorStoreConfig
 
 import logging
 
-def mute_logger(name: str):
+def mute_logger(name: str, level: logging._Level = logging.WARNING):
     logger = logging.getLogger(name)
-    logger.setLevel(logging.WARNING)
+    logger.setLevel(level)
     logger.propagate = False
 
 # 静音日志
 for logger_name in ['httpx', 'mem0.memory.main', 'openai._base_client', 'mem0.memory.graph_memory']:
     mute_logger(logger_name)
+mute_logger('transformers', logging.ERROR)
 load_dotenv()
 
 class Mem0Config:
