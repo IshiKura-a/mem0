@@ -102,8 +102,13 @@ class MultiprocessMem0Processor:
     
     def _load_data(self) -> List[Dict]:
         """加载数据"""
-        with open(self.config.input_file, 'r') as f:
-            return json.load(f)
+        if self.config.input_file.endswith('.jsonl'):
+            return pd.read_json(self.config.input_file, lines=True, orient="records").to_dict(orient='records')
+        elif self.config.input_file.endswith('.json'):
+            with open(self.config.input_file, 'r') as f:
+                return json.load(f)
+        else:
+            raise NotImplementedError(f"不支持的输入文件格式: {self.config.input_file}")
     
     def _get_processed_tasks(self) -> set:
         """获取已处理的任务"""
@@ -157,6 +162,8 @@ class MultiprocessMem0Processor:
             process_func = process_single_item_locomo
         elif 'longmemeval' in self.config.output_file_prefix.lower():
             process_func = process_single_item
+        elif 'personamem' in self.config.output_file_prefix.lower():
+            process_func = process_single_item_personamem
         else:
             raise NotImplementedError(f"不支持的数据集类型: {self.config.output_file_prefix}")
         
@@ -201,8 +208,23 @@ def process_single_item(args) -> Optional[Dict]:
             memory.delete(memory_id=item_id)
             min_chat_num = min(config.search_limit, sum(len(s) for s in item['haystack_sessions']))
             
-            # 添加会话数据
-            _add_sessions_to_memory(memory, item, item_id, config.infer, worker_id)
+            add_start = time.time()
+            session_items = list(zip(item['haystack_sessions'], item['haystack_session_ids'], item['haystack_dates']))
+            
+            for haystack_session, haystack_session_id, haystack_date in tqdm(
+                session_items,
+                desc=f'[Worker-{worker_id}] for Question {item_id}',
+                position=worker_id
+            ):
+                memory.add(
+                    haystack_session,
+                    user_id=item_id,
+                    metadata={'haystack_session_id': haystack_session_id, 'haystack_date': haystack_date},
+                    infer=config.infer,
+                )
+            
+            add_time = time.time() - add_start
+            print(f"[Worker-{worker_id}] 问题 {item_id} 添加会话完成，耗时 {add_time:.2f}s")
             
             # 搜索相关记忆
             search_results = memory.search(query=item['question'], user_id=item_id, limit=config.search_limit)
@@ -406,27 +428,6 @@ def process_single_item_personamem(args) -> Optional[Dict]:
         print(f"[Worker-{worker_id}] 处理问题 {item.get(config.id_key, 'unknown')} 时出错: {e}")
         traceback.print_exc()
         return None
-
-
-def _add_sessions_to_memory(memory: Memory, item: Dict, item_id: str, infer: bool, worker_id: int):
-    """添加会话到memory"""
-    add_start = time.time()
-    session_items = list(zip(item['haystack_sessions'], item['haystack_session_ids'], item['haystack_dates']))
-    
-    for haystack_session, haystack_session_id, haystack_date in tqdm(
-        session_items,
-        desc=f'[Worker-{worker_id}] for Question {item_id}',
-        position=worker_id
-    ):
-        memory.add(
-            haystack_session,
-            user_id=item_id,
-            metadata={'haystack_session_id': haystack_session_id, 'haystack_date': haystack_date},
-            infer=infer,
-        )
-    
-    add_time = time.time() - add_start
-    print(f"[Worker-{worker_id}] 问题 {item_id} 添加会话完成，耗时 {add_time:.2f}s")
 
 
 def writer_worker(queue: mp.Queue, output_file: str):
