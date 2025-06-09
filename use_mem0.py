@@ -20,7 +20,7 @@ from mem0.vector_stores.configs import VectorStoreConfig
 
 import logging
 
-def mute_logger(name: str, level: logging._Level = logging.WARNING):
+def mute_logger(name: str, level: int = logging.WARNING):
     logger = logging.getLogger(name)
     logger.setLevel(level)
     logger.propagate = False
