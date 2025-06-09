@@ -191,7 +191,7 @@ def process_single_item(args) -> Optional[Dict]:
         # 创建Memory实例
         memory_config_dict = config.get_memory_config_dict()
         memory_config_dict['vector_store']['config']['collection_name'] = \
-            f"mem0_collection_{item_id}_top{config.search_limit}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            f"mem0_collection_longmemeval_{item_id}_top{config.search_limit}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         memory_config = MemoryConfig(**memory_config_dict)
         memory = Memory(config=memory_config)
@@ -222,7 +222,8 @@ def process_single_item(args) -> Optional[Dict]:
                     'retrieval_rate': retrieval_rate,
                     'search_results': search_results['results'],
                     'mem0_type': 'mem0+' if config.enable_graph else 'mem0',
-                    'worker_id': worker_id
+                    'worker_id': worker_id,
+                    'collection_name': memory_config_dict['vector_store']['config']['collection_name']
                 })
                 
                 if config.enable_graph and 'relations' in search_results:
@@ -255,7 +256,7 @@ def process_single_item_locomo(args) -> Optional[Dict]:
         # 创建Memory实例
         memory_config_dict = config.get_memory_config_dict()
         memory_config_dict['vector_store']['config']['collection_name'] = \
-            f"mem0_collection_{item_id}_top{config.search_limit}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            f"mem0_collection_locomo_{item_id}_top{config.search_limit}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         memory_config = MemoryConfig(**memory_config_dict)
         memory = Memory(config=memory_config)
@@ -293,39 +294,106 @@ def process_single_item_locomo(args) -> Optional[Dict]:
             
             # 检查搜索结果是否满足条件
             if all([len(results) >= min_chat_num for results in search_results]):
-                if config.infer:
-                    result = item.copy()
-                    result.update({
-                        'search_results': search_results,
-                        'relations': relations,
-                        'mem0_type': 'mem0+' if config.enable_graph else 'mem0',
-                        'worker_id': worker_id,
-                        'retrieval_rate': -1,
-                    })
-                    return result
-
-                topk_dia_ids = [[_['actor_id'].split('_')[-1] for _ in results] for results in search_results]
-                answer_retrieved = [
-                    [e in topk_dia_ids_per_qa for e in qa['evidence']]
-                    for qa, topk_dia_ids_per_qa in zip(item['qa'], topk_dia_ids)
-                ]
-                
-                retrieval_rate = sum([sum(_) for _ in answer_retrieved]) / sum([len(_) for _ in answer_retrieved])
-                
-                # 准备返回结果
+                # 准备基础返回结果
                 result = item.copy()
-                result.update({
-                    'topk_dia_ids': topk_dia_ids,
-                    'answer_retrived': answer_retrieved,
-                    'retrieval_rate': retrieval_rate,
+                base_result = {
                     'search_results': search_results,
                     'relations': relations,
                     'mem0_type': 'mem0+' if config.enable_graph else 'mem0',
-                    'worker_id': worker_id
+                    'worker_id': worker_id,
+                    'collection_name': memory_config_dict['vector_store']['config']['collection_name']
+                }
+                
+                if config.infer:
+                    # 推理模式：设置检索率为-1
+                    base_result['retrieval_rate'] = -1
+                else:
+                    # 非推理模式：计算具体的检索率和相关数据
+                    topk_dia_ids = [[_['actor_id'].split('_')[-1] for _ in results] for results in search_results]
+                    answer_retrieved = [
+                        [e in topk_dia_ids_per_qa for e in qa['evidence']]
+                        for qa, topk_dia_ids_per_qa in zip(item['qa'], topk_dia_ids)
+                    ]
+                    retrieval_rate = sum([sum(_) for _ in answer_retrieved]) / sum([len(_) for _ in answer_retrieved])
+                    
+                    base_result.update({
+                        'topk_dia_ids': topk_dia_ids,
+                        'answer_retrived': answer_retrieved,
+                        'retrieval_rate': retrieval_rate
+                    })
+                
+                result.update(base_result)
+                
+                total_time = time.time() - start_time
+                retrieval_info = f"，检索率 {base_result['retrieval_rate']:.4f}" if not config.infer else ""
+                print(f"[Worker-{worker_id}] 问题 {item_id} 处理完成，总耗时 {total_time:.2f}s{retrieval_info}")
+                return result
+            else:
+                print(f"[Worker-{worker_id}] 问题 {item_id} 搜索结果不足，重试 {attempt+1}/{config.max_retries}")
+        
+        print(f"[Worker-{worker_id}] 问题 {item_id} 处理失败，重试次数超过限制")
+        return None
+        
+    except Exception as e:
+        import traceback
+        print(f"[Worker-{worker_id}] 处理问题 {item.get(config.id_key, 'unknown')} 时出错: {e}")
+        traceback.print_exc()
+        return None
+
+
+def process_single_item_personamem(args) -> Optional[Dict]:
+    """多进程工作函数"""
+    item, config, worker_id = args
+    
+    try:
+        item_id = item[config.id_key]
+        start_time = time.time()
+        
+        # 创建Memory实例
+        memory_config_dict = config.get_memory_config_dict()
+        memory_config_dict['vector_store']['config']['collection_name'] = \
+            f"mem0_collection_personamem_{item_id}_top{config.search_limit}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        memory_config = MemoryConfig(**memory_config_dict)
+        memory = Memory(config=memory_config)
+        
+        # 重试机制处理单个项目
+        for attempt in range(config.max_retries):
+            memory.delete(memory_id=item_id)
+            min_chat_num = min(
+                config.search_limit, len(item['contexts'])
+            )
+            
+            memory.add(
+                item['contexts'][:1],
+                user_id=item_id,
+                metadata={},
+                infer=config.infer,
+            )
+            
+            search_results = []
+            relations = []
+            for qa in item['questions']:
+                result = memory.search(query=qa['user_question_or_message'], user_id=item_id, limit=config.search_limit)
+                search_results.append(result['results'])
+                relations.append(result.get('relations', []))
+            
+            # 检查搜索结果是否满足条件
+            if all([len(results) >= min_chat_num for results in search_results]):
+                # 准备基础返回结果
+                result = item.copy()
+                result.update({
+                    'search_results': search_results,
+                    'relations': relations,
+                    'mem0_type': 'mem0+' if config.enable_graph else 'mem0',
+                    'worker_id': worker_id,
+                    'retrieval_rate': -1,
+                    'collection_name': memory_config_dict['vector_store']['config']['collection_name']
                 })
                 
                 total_time = time.time() - start_time
-                print(f"[Worker-{worker_id}] 问题 {item_id} 处理完成，总耗时 {total_time:.2f}s，检索率 {retrieval_rate:.4f}")
+                retrieval_info = f"，检索率 {result['retrieval_rate']:.4f}" if not config.infer else ""
+                print(f"[Worker-{worker_id}] 问题 {item_id} 处理完成，总耗时 {total_time:.2f}s{retrieval_info}")
                 return result
             else:
                 print(f"[Worker-{worker_id}] 问题 {item_id} 搜索结果不足，重试 {attempt+1}/{config.max_retries}")

@@ -111,7 +111,7 @@ class MemoryGraph:
         bm25 = BM25Okapi(search_outputs_sequence)
 
         tokenized_query = query.split(" ")
-        reranked_results = bm25.get_top_n(tokenized_query, search_outputs_sequence, n=5)
+        reranked_results = bm25.get_top_n(tokenized_query, search_outputs_sequence, n=limit)
 
         search_results = []
         for item in reranked_results:

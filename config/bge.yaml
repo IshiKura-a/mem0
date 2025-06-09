@@ -1,18 +1,19 @@
 max_workers: 40
-search_limit: 30
+search_limit: 100
 enable_graph: true
 
 # === 文件路径参数 ===
 # input_file: '/mnt/zh/dataset/copilot/longmemeval_s.json'
-input_file: '/mnt/zh/dataset/copilot/locomo10.json'
+# input_file: '/mnt/zh/dataset/copilot/locomo10.json'
+input_file: '/mnt/zh/dataset/copilot/personamem_32k.jsonl'
 output_dir: '/mnt/zh/outputs/copilot_rag/'
-output_file_prefix: 'locomo'
+output_file_prefix: 'personamem_32k'
 output_file_postfix: '_async'
 
 # === 处理参数 ===
-max_retries: 3
+max_retries: 2
 infer: false
-id_key: 'sample_id'
+id_key: 'shared_context_id'
 
 # === Memory配置 ===
 memory_config:
