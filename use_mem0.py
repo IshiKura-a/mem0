@@ -383,7 +383,7 @@ def process_single_item_personamem(args) -> Optional[Dict]:
         for attempt in range(config.max_retries):
             memory.delete(memory_id=item_id)
             min_chat_num = min(
-                config.search_limit, len(item['contexts'] - 1)
+                config.search_limit, len(item['contexts']) - 1
             )
             
             memory.add(
