@@ -28,7 +28,10 @@ def mute_logger(name: str, level: int = logging.WARNING):
 # 静音日志
 for logger_name in ['httpx', 'mem0.memory.main', 'openai._base_client', 'mem0.memory.graph_memory']:
     mute_logger(logger_name)
-mute_logger('transformers', logging.ERROR)
+
+from transformers import logging
+logging.set_verbosity_error()
+
 load_dotenv()
 
 class Mem0Config:
@@ -297,7 +300,7 @@ def process_single_item_locomo(args) -> Optional[Dict]:
                             position=worker_id):
                 if isinstance(v, list):
                     session = [{
-                        'role': 'user' if chat['speaker'] == item['conversation']['speaker_a'] else 'assistant',
+                        'role': chat['speaker'],
                         'name': f'{chat["speaker"]}_{chat["dia_id"]}',
                         'content': chat['text']
                     } for chat in v]
